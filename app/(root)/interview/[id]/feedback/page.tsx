@@ -66,7 +66,7 @@ const Feedback = async ({ params }: RouteParams) => {
         <h2>Breakdown of the Interview:</h2>
         {feedback?.categoryScores?.map((category, index) => (
           <div key={index}>
-            <p className="font-bold">
+            <p className="font-bold" style={{ color: "#FEF2C5" }}>
               {index + 1}. {category.name} ({category.score}/100)
             </p>
             <p>{category.comment}</p>

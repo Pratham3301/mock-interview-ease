@@ -20,6 +20,11 @@ import { BaseVoiceSession } from "./VoiceSession";
 import { PcmAudioPlayer, PcmMicrophone } from "./audio";
 import { postJson, toAppError } from "./http";
 import { RetainedOperation } from "./operations";
+import {
+  geminiClientSilenceDurationMs,
+  geminiHybridVadEnabled,
+  geminiVadConfig,
+} from "./vad";
 import type {
   InterviewRequirements,
   VoiceSessionConfig,
@@ -141,9 +146,13 @@ export class GeminiLiveSession extends BaseVoiceSession {
             this.player.interrupt();
             this.emitState("user-speaking");
           } else if (!this.stopping) {
+            if (geminiHybridVadEnabled) {
+              this.liveSession?.sendRealtimeInput({ audioStreamEnd: true });
+            }
             this.emitState("assistant-thinking");
           }
-        }
+        },
+        geminiClientSilenceDurationMs
       );
       try {
         await this.microphone.start();
@@ -200,11 +209,7 @@ export class GeminiLiveSession extends BaseVoiceSession {
           outputAudioTranscription: {},
           realtimeInputConfig: {
             activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
-            automaticActivityDetection: {
-              disabled: false,
-              prefixPaddingMs: 40,
-              silenceDurationMs: 500,
-            },
+            ...geminiVadConfig,
           },
           systemInstruction,
           tools: [

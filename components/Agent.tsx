@@ -5,14 +5,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { useGeminiApiKey } from "@/components/GeminiApiKeyProvider";
 import { createFeedback } from "@/lib/actions/general.action";
-import {
-  getTemporaryGeminiKey,
-  maskApiKey,
-  removeTemporaryGeminiKey,
-  setTemporaryGeminiKey,
-} from "@/lib/gemini/byok";
 import {
   clearStoredTranscript,
   readStoredTranscript,
@@ -72,8 +66,10 @@ const Agent = ({
   feedbackId,
   type,
   questions,
+  initialTranscript,
 }: AgentProps) => {
   const router = useRouter();
+  const { apiKey, requestApiKey } = useGeminiApiKey();
   const sessionRef = useRef<VoiceSession | undefined>(undefined);
   const messagesRef = useRef<TranscriptMessage[]>([]);
   const feedbackInFlight = useRef(false);
@@ -86,17 +82,11 @@ const Agent = ({
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState<AppError>();
-  const [showKeyForm, setShowKeyForm] = useState(false);
-  const [apiKeyInput, setApiKeyInput] = useState("");
-  const [savedApiKey, setSavedApiKey] = useState("");
-  const [keyFormError, setKeyFormError] = useState("");
 
   const lastMessage = messages.at(-1)?.content ?? "";
   const isActive = activeStates.has(voiceState);
   const isBusy =
-    isActive ||
-    voiceState === "ending" ||
-    voiceState === "generating-feedback";
+    isActive || voiceState === "ending" || voiceState === "generating-feedback";
   const isFeedbackRecovery =
     error?.code === "feedback" ||
     (lastMeaningfulState.current === "generating-feedback" &&
@@ -133,16 +123,15 @@ const Agent = ({
       }),
     ];
 
-    const temporaryKey = getTemporaryGeminiKey(sessionStorage);
-    savedApiKeyRef.current = temporaryKey;
-    setSavedApiKey(temporaryKey);
-    session.setApiKey(temporaryKey || undefined);
-
     if (type === "interview" && interviewId) {
       const stored = readStoredTranscript(sessionStorage, interviewId);
-      if (stored.length) {
-        messagesRef.current = stored;
-        setMessages(stored);
+      const restored =
+        (initialTranscript?.length ?? 0) >= stored.length
+          ? (initialTranscript ?? [])
+          : stored;
+      if (restored.length) {
+        messagesRef.current = restored;
+        setMessages(restored);
         setError(feedbackError);
       }
     }
@@ -155,6 +144,11 @@ const Agent = ({
     // Session callbacks intentionally use refs so the provider is created once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    savedApiKeyRef.current = apiKey;
+    sessionRef.current?.setApiKey(apiKey || undefined);
+  }, [apiKey]);
 
   const generateFeedback = async (transcript: TranscriptMessage[]) => {
     if (
@@ -184,7 +178,12 @@ const Agent = ({
       const result = await createFeedback({
         interviewId,
         userId,
-        transcript: transcript.map(({ role, content }) => ({ role, content })),
+        transcript: transcript.map(({ role, content, timestamp, final }) => ({
+          role,
+          content,
+          timestamp,
+          final,
+        })),
         feedbackId,
         temporaryApiKey: savedApiKeyRef.current || undefined,
       });
@@ -193,7 +192,7 @@ const Agent = ({
         setError(
           result.error.code === "unknown"
             ? feedbackError
-            : { ...result.error, fallbackAvailable: false }
+            : { ...result.error, fallbackAvailable: false },
         );
         setVoiceState("error");
         return;
@@ -259,32 +258,14 @@ const Agent = ({
   };
 
   const handleUseKey = async () => {
-    setKeyFormError("");
-    try {
-      const retryFeedback = isFeedbackRecovery;
-      setTemporaryGeminiKey(sessionStorage, apiKeyInput);
-      const normalized = apiKeyInput.trim();
-      savedApiKeyRef.current = normalized;
-      setSavedApiKey(normalized);
-      setApiKeyInput("");
-      setShowKeyForm(false);
-      setError(undefined);
-      sessionRef.current?.setApiKey(normalized);
-      if (retryFeedback) await generateFeedback(messagesRef.current);
-      else await sessionRef.current?.retry();
-    } catch (keyError) {
-      setKeyFormError(
-        keyError instanceof Error ? keyError.message : "The API key is invalid."
-      );
-    }
-  };
+    const temporaryKey = await requestApiKey();
+    if (!temporaryKey) return;
 
-  const handleRemoveKey = () => {
-    removeTemporaryGeminiKey(sessionStorage);
-    savedApiKeyRef.current = "";
-    setSavedApiKey("");
-    setApiKeyInput("");
-    sessionRef.current?.setApiKey(undefined);
+    savedApiKeyRef.current = temporaryKey;
+    sessionRef.current?.setApiKey(temporaryKey);
+    setError(undefined);
+    if (isFeedbackRecovery) await generateFeedback(messagesRef.current);
+    else await sessionRef.current?.retry();
   };
 
   const canUseFallback =
@@ -293,7 +274,7 @@ const Agent = ({
     lastMeaningfulState.current !== "generating-interview";
 
   const modeLabel = useMemo(() => {
-    if (voiceMode === "live") return "Gemini Live · Aoede";
+    if (voiceMode === "live") return "Gemini Live";
     if (voiceMode === "fallback") return "Compatibility voice · Kokoro";
     return "";
   }, [voiceMode]);
@@ -351,7 +332,7 @@ const Agent = ({
               key={lastMessage}
               className={cn(
                 "transition-opacity duration-500 opacity-0",
-                "animate-fadeIn opacity-100"
+                "animate-fadeIn opacity-100",
               )}
             >
               {lastMessage}
@@ -382,11 +363,8 @@ const Agent = ({
               </Button>
             )}
             {error.byokAvailable && (
-              <Button
-                className="btn-secondary"
-                onClick={() => setShowKeyForm(true)}
-              >
-                Use my API key
+              <Button className="btn-secondary" onClick={handleUseKey}>
+                Use your API key
               </Button>
             )}
             <Button className="btn-secondary" onClick={() => router.push("/")}>
@@ -394,63 +372,6 @@ const Agent = ({
             </Button>
           </div>
         </section>
-      )}
-
-      {showKeyForm && (
-        <section
-          className="dark-gradient rounded-2xl border border-primary-200/40 p-5 flex flex-col gap-4"
-          aria-labelledby="gemini-key-title"
-        >
-          <div>
-            <h3 id="gemini-key-title" className="text-xl">
-              Use your own Gemini API key
-            </h3>
-            <p className="mt-2">
-              Your key is used only for Gemini requests in this browser session
-              and is not saved to your account.
-            </p>
-          </div>
-          <label htmlFor="gemini-api-key" className="text-light-100">
-            Gemini API key
-          </label>
-          <Input
-            id="gemini-api-key"
-            type="password"
-            autoComplete="off"
-            value={apiKeyInput}
-            onChange={(event) => setApiKeyInput(event.target.value)}
-            placeholder="Enter your Gemini API key"
-            aria-invalid={Boolean(keyFormError)}
-          />
-          {keyFormError && <p role="alert">{keyFormError}</p>}
-          <div className="flex flex-wrap gap-3">
-            <Button className="btn-primary" onClick={handleUseKey}>
-              Use key
-            </Button>
-            <Button
-              className="btn-secondary"
-              onClick={() => {
-                setShowKeyForm(false);
-                setKeyFormError("");
-              }}
-            >
-              Cancel
-            </Button>
-          </div>
-        </section>
-      )}
-
-      {savedApiKey && !showKeyForm && (
-        <div className="flex items-center justify-center gap-3 text-sm">
-          <p>Temporary key: {maskApiKey(savedApiKey)}</p>
-          <button
-            type="button"
-            className="text-primary-200 underline underline-offset-4"
-            onClick={handleRemoveKey}
-          >
-            Remove API key
-          </button>
-        </div>
       )}
 
       <div className="w-full flex justify-center">
@@ -470,12 +391,14 @@ const Agent = ({
               className="relative btn-call disabled:cursor-not-allowed disabled:opacity-60"
               onClick={() => handleStart(false)}
               disabled={isBusy || voiceState === "finished"}
-              aria-label={type === "interview" ? "Start interview" : "Start setup"}
+              aria-label={
+                type === "interview" ? "Start interview" : "Start setup"
+              }
             >
               <span
                 className={cn(
                   "absolute animate-ping rounded-full opacity-75",
-                  voiceState !== "connecting" && "hidden"
+                  voiceState !== "connecting" && "hidden",
                 )}
                 aria-hidden="true"
               />

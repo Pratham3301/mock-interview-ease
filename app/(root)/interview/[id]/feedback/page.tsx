@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import {
   getFeedbackByInterviewId,
   getInterviewById,
+  getPendingFeedbackTranscript,
 } from "@/lib/actions/general.action";
 import { Button } from "@/components/ui/button";
 import { getCurrentUser } from "@/lib/actions/auth.action";
@@ -22,6 +23,8 @@ const Feedback = async ({ params }: RouteParams) => {
     interviewId: id,
     userId: user.id,
   });
+  const pendingTranscript = await getPendingFeedbackTranscript(id);
+  if (pendingTranscript.length) redirect(`/interview/${id}`);
 
   return (
     <section className="section-feedback">

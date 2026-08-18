@@ -100,6 +100,14 @@ GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview
 GEMINI_LEGACY_LIVE_MODEL=gemini-2.5-flash-native-audio-preview-12-2025
 GEMINI_FLASH_MODEL=gemini-3.7-flash
 
+# Optional Gemini Live turn-detection tuning
+NEXT_PUBLIC_GEMINI_HYBRID_VAD=true
+NEXT_PUBLIC_GEMINI_CLIENT_VAD_SILENCE_MS=450
+NEXT_PUBLIC_GEMINI_VAD_SILENCE_MS=500
+NEXT_PUBLIC_GEMINI_VAD_PREFIX_PADDING_MS=40
+NEXT_PUBLIC_GEMINI_VAD_START_SENSITIVITY=high
+NEXT_PUBLIC_GEMINI_VAD_END_SENSITIVITY=high
+
 NEXT_PUBLIC_BASE_URL=
 
 NEXT_PUBLIC_FIREBASE_API_KEY=
@@ -115,6 +123,8 @@ FIREBASE_PRIVATE_KEY=
 ```
 
 Replace the placeholder values with your actual **[Firebase](https://firebase.google.com/)** credentials and a server-side Gemini API key. Never prefix the Gemini key with `NEXT_PUBLIC_`. Live model names are configurable because preview endpoints can change. When the primary Live model is unavailable, the app tries the configured older Live model before switching to compatibility voice mode.
+
+The VAD settings are optional and contain no secrets. Hybrid VAD is enabled by default: browser-side silence detection asks Gemini to finish the turn after 450 ms, while Gemini's automatic server VAD remains available as a safety net. Reduce the client silence value for faster turn-taking, or increase it if natural pauses are being cut off. The start/end sensitivity values accept `high` or `low`.
 
 **Running the Project**
 
@@ -557,9 +567,10 @@ prompt: `
         Please score the candidate from 0 to 100 in the following areas. Do not add categories other than the ones provided:
         - **Communication Skills**: Clarity, articulation, structured responses.
         - **Technical Knowledge**: Understanding of key concepts for the role.
-        - **Problem-Solving**: Ability to analyze problems and propose solutions.
-        - **Cultural & Role Fit**: Alignment with company values and job role.
-        - **Confidence & Clarity**: Confidence in responses, engagement, and clarity.
+        - **Problem Solving**: Ability to analyze problems and propose solutions.
+        - **Cultural Fit**: Alignment with company values and job role.
+        - **Confidence and Clarity**: Confidence in responses, engagement, and clarity.
+        Include each category exactly once using these exact category names.
         `,
 system:
         "You are a professional interviewer analyzing a mock interview. Your task is to evaluate the candidate based on structured categories",

@@ -64,7 +64,8 @@ export class PcmMicrophone {
 
   constructor(
     private readonly onChunk: AudioChunkCallback,
-    private readonly onSpeechActivity: SpeechActivityCallback
+    private readonly onSpeechActivity: SpeechActivityCallback,
+    private readonly silenceDurationMs = 350
   ) {}
 
   async start() {
@@ -141,7 +142,7 @@ export class PcmMicrophone {
       this.quietTimer = undefined;
       this.speaking = false;
       this.onSpeechActivity(false);
-    }, 350);
+    }, this.silenceDurationMs);
   }
 }
 

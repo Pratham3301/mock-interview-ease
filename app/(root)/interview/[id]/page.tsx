@@ -7,6 +7,7 @@ import { getRandomInterviewCover } from "@/lib/utils";
 import {
   getFeedbackByInterviewId,
   getInterviewById,
+  getPendingFeedbackTranscript,
 } from "@/lib/actions/general.action";
 import { getCurrentUser } from "@/lib/actions/auth.action";
 import DisplayTechIcons from "@/components/DisplayTechIcons";
@@ -24,6 +25,7 @@ const InterviewDetails = async ({ params }: RouteParams) => {
     interviewId: id,
     userId: user.id,
   });
+  const pendingTranscript = await getPendingFeedbackTranscript(id);
 
   return (
     <>
@@ -55,6 +57,7 @@ const InterviewDetails = async ({ params }: RouteParams) => {
         type="interview"
         questions={interview.questions}
         feedbackId={feedback?.id}
+        initialTranscript={pendingTranscript}
       />
     </>
   );

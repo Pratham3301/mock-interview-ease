@@ -1,25 +1,69 @@
 "use client";
 
 import Image from "next/image";
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { cn } from "@/lib/utils";
-import { vapi } from "@/lib/vapi.sdk";
-import { interviewer } from "@/constants";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { createFeedback } from "@/lib/actions/general.action";
+import {
+  getTemporaryGeminiKey,
+  maskApiKey,
+  removeTemporaryGeminiKey,
+  setTemporaryGeminiKey,
+} from "@/lib/gemini/byok";
+import {
+  clearStoredTranscript,
+  readStoredTranscript,
+  storeTranscript,
+} from "@/lib/voice/progress";
+import { createVoiceSession } from "@/lib/voice";
+import type {
+  AppError,
+  TranscriptMessage,
+  VoiceMode,
+  VoiceSession,
+  VoiceSessionState,
+} from "@/lib/voice";
+import { cn } from "@/lib/utils";
 
-enum CallStatus {
-  INACTIVE = "INACTIVE",
-  CONNECTING = "CONNECTING",
-  ACTIVE = "ACTIVE",
-  FINISHED = "FINISHED",
-}
+const statusLabels: Record<VoiceSessionState, string> = {
+  idle: "Ready",
+  connecting: "Connecting…",
+  listening: "Listening…",
+  "user-speaking": "Listening…",
+  "assistant-thinking": "Thinking…",
+  "assistant-speaking": "Speaking…",
+  "preparing-voice": "Preparing offline voice…",
+  "generating-interview": "Generating interview…",
+  "generating-feedback": "Generating feedback…",
+  reconnecting: "Reconnecting…",
+  ending: "Ending…",
+  finished: "Finished",
+  error: "Needs attention",
+};
 
-interface SavedMessage {
-  role: "user" | "system" | "assistant";
-  content: string;
-}
+const activeStates = new Set<VoiceSessionState>([
+  "connecting",
+  "listening",
+  "user-speaking",
+  "assistant-thinking",
+  "assistant-speaking",
+  "preparing-voice",
+  "generating-interview",
+  "reconnecting",
+]);
+
+const feedbackError: AppError = {
+  code: "feedback",
+  title: "Feedback couldn't be generated",
+  message:
+    "Your interview was completed successfully, but we couldn't generate the feedback right now.",
+  retryable: true,
+  fallbackAvailable: false,
+  byokAvailable: true,
+};
 
 const Agent = ({
   userName,
@@ -30,145 +74,258 @@ const Agent = ({
   questions,
 }: AgentProps) => {
   const router = useRouter();
-  const [callStatus, setCallStatus] = useState<CallStatus>(CallStatus.INACTIVE);
-  const [messages, setMessages] = useState<SavedMessage[]>([]);
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [lastMessage, setLastMessage] = useState<string>("");
+  const sessionRef = useRef<VoiceSession | undefined>(undefined);
+  const messagesRef = useRef<TranscriptMessage[]>([]);
+  const feedbackInFlight = useRef(false);
+  const operationIdRef = useRef<string | undefined>(undefined);
+  const lastMeaningfulState = useRef<VoiceSessionState>("idle");
+  const savedApiKeyRef = useRef("");
+
+  const [voiceState, setVoiceState] = useState<VoiceSessionState>("idle");
+  const [voiceMode, setVoiceMode] = useState<VoiceMode>();
+  const [messages, setMessages] = useState<TranscriptMessage[]>([]);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState<AppError>();
+  const [showKeyForm, setShowKeyForm] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [savedApiKey, setSavedApiKey] = useState("");
+  const [keyFormError, setKeyFormError] = useState("");
+
+  const lastMessage = messages.at(-1)?.content ?? "";
+  const isActive = activeStates.has(voiceState);
+  const isBusy =
+    isActive ||
+    voiceState === "ending" ||
+    voiceState === "generating-feedback";
+  const isFeedbackRecovery =
+    error?.code === "feedback" ||
+    (lastMeaningfulState.current === "generating-feedback" &&
+      Boolean(interviewId));
 
   useEffect(() => {
-    const onCallStart = () => {
-      setCallStatus(CallStatus.ACTIVE);
-    };
+    const session = createVoiceSession();
+    sessionRef.current = session;
 
-    const onCallEnd = () => {
-      setCallStatus(CallStatus.FINISHED);
-    };
+    const unsubscribers = [
+      session.onTranscript((message) => {
+        messagesRef.current = [...messagesRef.current, message];
+        setMessages(messagesRef.current);
+        if (type === "interview" && interviewId) {
+          storeTranscript(sessionStorage, interviewId, messagesRef.current);
+        }
+      }),
+      session.onStateChange((state) => {
+        if (state !== "error") lastMeaningfulState.current = state;
+        setVoiceState(state);
+      }),
+      session.onModeChange((mode, nextNotice) => {
+        setVoiceMode(mode);
+        if (nextNotice) setNotice(nextNotice);
+      }),
+      session.onError((nextError) => setError(nextError)),
+      session.onComplete((reason) => {
+        if (reason === "generation") {
+          router.push("/");
+          router.refresh();
+        } else {
+          void generateFeedback(messagesRef.current);
+        }
+      }),
+    ];
 
-    const onMessage = (message: Message) => {
-      if (message.type === "transcript" && message.transcriptType === "final") {
-        const newMessage = { role: message.role, content: message.transcript };
-        setMessages((prev) => [...prev, newMessage]);
+    const temporaryKey = getTemporaryGeminiKey(sessionStorage);
+    savedApiKeyRef.current = temporaryKey;
+    setSavedApiKey(temporaryKey);
+    session.setApiKey(temporaryKey || undefined);
+
+    if (type === "interview" && interviewId) {
+      const stored = readStoredTranscript(sessionStorage, interviewId);
+      if (stored.length) {
+        messagesRef.current = stored;
+        setMessages(stored);
+        setError(feedbackError);
       }
-    };
-
-    const onSpeechStart = () => {
-      console.log("speech start");
-      setIsSpeaking(true);
-    };
-
-    const onSpeechEnd = () => {
-      console.log("speech end");
-      setIsSpeaking(false);
-    };
-
-    const onError = (error: Error) => {
-      console.log("Error:", error);
-    };
-
-    vapi.on("call-start", onCallStart);
-    vapi.on("call-end", onCallEnd);
-    vapi.on("message", onMessage);
-    vapi.on("speech-start", onSpeechStart);
-    vapi.on("speech-end", onSpeechEnd);
-    vapi.on("error", onError);
+    }
 
     return () => {
-      vapi.off("call-start", onCallStart);
-      vapi.off("call-end", onCallEnd);
-      vapi.off("message", onMessage);
-      vapi.off("speech-start", onSpeechStart);
-      vapi.off("speech-end", onSpeechEnd);
-      vapi.off("error", onError);
+      unsubscribers.forEach((unsubscribe) => unsubscribe());
+      void session.stop();
+      sessionRef.current = undefined;
     };
+    // Session callbacks intentionally use refs so the provider is created once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    if (messages.length > 0) {
-      setLastMessage(messages[messages.length - 1].content);
+  const generateFeedback = async (transcript: TranscriptMessage[]) => {
+    if (
+      feedbackInFlight.current ||
+      !interviewId ||
+      !userId ||
+      transcript.length === 0
+    ) {
+      if (!transcript.length) {
+        setError({
+          ...feedbackError,
+          message:
+            "No completed transcript turns were available for feedback. Please retake the interview.",
+          retryable: false,
+        });
+      }
+      return;
     }
 
-    const handleGenerateFeedback = async (messages: SavedMessage[]) => {
-      console.log("handleGenerateFeedback");
+    feedbackInFlight.current = true;
+    setError(undefined);
+    lastMeaningfulState.current = "generating-feedback";
+    setVoiceState("generating-feedback");
+    storeTranscript(sessionStorage, interviewId, transcript);
 
-      const { success, feedbackId: id } = await createFeedback({
-        interviewId: interviewId!,
-        userId: userId!,
-        transcript: messages,
+    try {
+      const result = await createFeedback({
+        interviewId,
+        userId,
+        transcript: transcript.map(({ role, content }) => ({ role, content })),
         feedbackId,
+        temporaryApiKey: savedApiKeyRef.current || undefined,
       });
 
-      if (success && id) {
-        router.push(`/interview/${interviewId}/feedback`);
-      } else {
-        console.log("Error saving feedback");
-        router.push("/");
+      if (!result.success) {
+        setError(
+          result.error.code === "unknown"
+            ? feedbackError
+            : { ...result.error, fallbackAvailable: false }
+        );
+        setVoiceState("error");
+        return;
       }
-    };
 
-    if (callStatus === CallStatus.FINISHED) {
-      if (type === "generate") {
-        router.push("/");
-      } else {
-        handleGenerateFeedback(messages);
-      }
+      clearStoredTranscript(sessionStorage, interviewId);
+      router.push(`/interview/${interviewId}/feedback`);
+      router.refresh();
+    } catch {
+      setError(feedbackError);
+      setVoiceState("error");
+    } finally {
+      feedbackInFlight.current = false;
     }
-  }, [messages, callStatus, feedbackId, interviewId, router, type, userId]);
+  };
 
-  const handleCall = async () => {
-    setCallStatus(CallStatus.CONNECTING);
+  const handleStart = async (forceFallback = false) => {
+    if (isBusy || !sessionRef.current || !userId) return;
+    setError(undefined);
+    setNotice("");
 
+    if (!operationIdRef.current) operationIdRef.current = crypto.randomUUID();
+    const initialTranscript =
+      type === "interview" && interviewId
+        ? readStoredTranscript(sessionStorage, interviewId)
+        : messagesRef.current;
+
+    await sessionRef.current.start({
+      kind: type,
+      userName,
+      userId,
+      interviewId,
+      questions,
+      initialTranscript,
+      operationId: operationIdRef.current,
+      apiKey: savedApiKeyRef.current || undefined,
+      forceFallback,
+    });
+  };
+
+  const handleEnd = async () => {
+    if (!sessionRef.current || voiceState === "ending") return;
+    await sessionRef.current.stop();
     if (type === "generate") {
-      await vapi.start(process.env.NEXT_PUBLIC_VAPI_WORKFLOW_ID!, {
-        variableValues: {
-          username: userName,
-          userid: userId,
-        },
-      });
+      router.push("/");
     } else {
-      let formattedQuestions = "";
-      if (questions) {
-        formattedQuestions = questions
-          .map((question) => `- ${question}`)
-          .join("\n");
-      }
-
-      await vapi.start(interviewer, {
-        variableValues: {
-          questions: formattedQuestions,
-        },
-      });
+      await generateFeedback(messagesRef.current);
     }
   };
 
-  const handleDisconnect = () => {
-    setCallStatus(CallStatus.FINISHED);
-    vapi.stop();
+  const handleRetry = async () => {
+    setError(undefined);
+    if (isFeedbackRecovery) {
+      await generateFeedback(messagesRef.current);
+    } else {
+      await sessionRef.current?.retry();
+    }
   };
+
+  const handleFallback = async () => {
+    setError(undefined);
+    await sessionRef.current?.useFallback();
+  };
+
+  const handleUseKey = async () => {
+    setKeyFormError("");
+    try {
+      const retryFeedback = isFeedbackRecovery;
+      setTemporaryGeminiKey(sessionStorage, apiKeyInput);
+      const normalized = apiKeyInput.trim();
+      savedApiKeyRef.current = normalized;
+      setSavedApiKey(normalized);
+      setApiKeyInput("");
+      setShowKeyForm(false);
+      setError(undefined);
+      sessionRef.current?.setApiKey(normalized);
+      if (retryFeedback) await generateFeedback(messagesRef.current);
+      else await sessionRef.current?.retry();
+    } catch (keyError) {
+      setKeyFormError(
+        keyError instanceof Error ? keyError.message : "The API key is invalid."
+      );
+    }
+  };
+
+  const handleRemoveKey = () => {
+    removeTemporaryGeminiKey(sessionStorage);
+    savedApiKeyRef.current = "";
+    setSavedApiKey("");
+    setApiKeyInput("");
+    sessionRef.current?.setApiKey(undefined);
+  };
+
+  const canUseFallback =
+    Boolean(error?.fallbackAvailable) &&
+    voiceMode !== "fallback" &&
+    lastMeaningfulState.current !== "generating-interview";
+
+  const modeLabel = useMemo(() => {
+    if (voiceMode === "live") return "Gemini Live · Aoede";
+    if (voiceMode === "fallback") return "Compatibility voice · Kokoro";
+    return "";
+  }, [voiceMode]);
 
   return (
     <>
       <div className="call-view">
-        {/* AI Interviewer Card */}
         <div className="card-interviewer">
           <div className="avatar">
             <Image
               src="/ai-avatar.png"
-              alt="profile-image"
+              alt="AI interviewer"
               width={65}
               height={54}
               className="object-cover"
             />
-            {isSpeaking && <span className="animate-speak" />}
+            {voiceState === "assistant-speaking" && (
+              <span className="animate-speak" aria-hidden="true" />
+            )}
           </div>
           <h3>AI Interviewer</h3>
+          <p className="text-sm" aria-live="polite">
+            {statusLabels[voiceState]}
+          </p>
+          {modeLabel && <p className="text-xs text-light-400">{modeLabel}</p>}
         </div>
 
-        {/* User Profile Card */}
         <div className="card-border">
           <div className="card-content">
             <Image
               src="/user-avatar.png"
-              alt="profile-image"
+              alt={`${userName}'s profile`}
               width={539}
               height={539}
               className="rounded-full object-cover size-[120px]"
@@ -178,8 +335,17 @@ const Agent = ({
         </div>
       </div>
 
-      {messages.length > 0 && (
-        <div className="transcript-border">
+      {notice && !error && (
+        <div
+          className="rounded-2xl border border-primary-200/30 bg-dark-200 px-5 py-3 text-center"
+          role="status"
+        >
+          <p>{notice}</p>
+        </div>
+      )}
+
+      {lastMessage && (
+        <div className="transcript-border" aria-live="polite">
           <div className="transcript">
             <p
               key={lastMessage}
@@ -194,26 +360,130 @@ const Agent = ({
         </div>
       )}
 
-      <div className="w-full flex justify-center">
-        {callStatus !== "ACTIVE" ? (
-          <button className="relative btn-call" onClick={() => handleCall()}>
-            <span
-              className={cn(
-                "absolute animate-ping rounded-full opacity-75",
-                callStatus !== "CONNECTING" && "hidden"
-              )}
-            />
+      {error && (
+        <section
+          className="dark-gradient rounded-2xl border border-destructive-100/50 p-5 flex flex-col gap-4"
+          role="alert"
+          aria-live="assertive"
+        >
+          <div>
+            <h3 className="text-xl">{error.title}</h3>
+            <p className="mt-2">{error.message}</p>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            {error.retryable && (
+              <Button className="btn-primary" onClick={handleRetry}>
+                {isFeedbackRecovery ? "Retry feedback" : "Retry"}
+              </Button>
+            )}
+            {canUseFallback && (
+              <Button className="btn-secondary" onClick={handleFallback}>
+                Use fallback voice
+              </Button>
+            )}
+            {error.byokAvailable && (
+              <Button
+                className="btn-secondary"
+                onClick={() => setShowKeyForm(true)}
+              >
+                Use my API key
+              </Button>
+            )}
+            <Button className="btn-secondary" onClick={() => router.push("/")}>
+              Back
+            </Button>
+          </div>
+        </section>
+      )}
 
-            <span className="relative">
-              {callStatus === "INACTIVE" || callStatus === "FINISHED"
-                ? "Call"
-                : ". . ."}
-            </span>
+      {showKeyForm && (
+        <section
+          className="dark-gradient rounded-2xl border border-primary-200/40 p-5 flex flex-col gap-4"
+          aria-labelledby="gemini-key-title"
+        >
+          <div>
+            <h3 id="gemini-key-title" className="text-xl">
+              Use your own Gemini API key
+            </h3>
+            <p className="mt-2">
+              Your key is used only for Gemini requests in this browser session
+              and is not saved to your account.
+            </p>
+          </div>
+          <label htmlFor="gemini-api-key" className="text-light-100">
+            Gemini API key
+          </label>
+          <Input
+            id="gemini-api-key"
+            type="password"
+            autoComplete="off"
+            value={apiKeyInput}
+            onChange={(event) => setApiKeyInput(event.target.value)}
+            placeholder="Enter your Gemini API key"
+            aria-invalid={Boolean(keyFormError)}
+          />
+          {keyFormError && <p role="alert">{keyFormError}</p>}
+          <div className="flex flex-wrap gap-3">
+            <Button className="btn-primary" onClick={handleUseKey}>
+              Use key
+            </Button>
+            <Button
+              className="btn-secondary"
+              onClick={() => {
+                setShowKeyForm(false);
+                setKeyFormError("");
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </section>
+      )}
+
+      {savedApiKey && !showKeyForm && (
+        <div className="flex items-center justify-center gap-3 text-sm">
+          <p>Temporary key: {maskApiKey(savedApiKey)}</p>
+          <button
+            type="button"
+            className="text-primary-200 underline underline-offset-4"
+            onClick={handleRemoveKey}
+          >
+            Remove API key
+          </button>
+        </div>
+      )}
+
+      <div className="w-full flex justify-center">
+        {isActive ? (
+          <button
+            type="button"
+            className="btn-disconnect"
+            onClick={handleEnd}
+            disabled={voiceState === "connecting" || voiceState === "ending"}
+          >
+            {type === "interview" ? "End Interview" : "End"}
           </button>
         ) : (
-          <button className="btn-disconnect" onClick={() => handleDisconnect()}>
-            End
-          </button>
+          !error && (
+            <button
+              type="button"
+              className="relative btn-call disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={() => handleStart(false)}
+              disabled={isBusy || voiceState === "finished"}
+              aria-label={type === "interview" ? "Start interview" : "Start setup"}
+            >
+              <span
+                className={cn(
+                  "absolute animate-ping rounded-full opacity-75",
+                  voiceState !== "connecting" && "hidden"
+                )}
+                aria-hidden="true"
+              />
+              <span className="relative">
+                {voiceState === "connecting" ? "Connecting…" : "Call"}
+              </span>
+            </button>
+          )
         )}
       </div>
     </>

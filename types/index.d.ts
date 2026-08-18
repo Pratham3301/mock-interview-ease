@@ -28,8 +28,9 @@ interface Interview {
 interface CreateFeedbackParams {
   interviewId: string;
   userId: string;
-  transcript: { role: string; content: string }[];
+  transcript: { role: "user" | "assistant"; content: string }[];
   feedbackId?: string;
+  temporaryApiKey?: string;
 }
 
 interface User {

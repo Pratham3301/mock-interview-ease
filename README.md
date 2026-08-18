@@ -5,12 +5,12 @@
   
   <div>
     <img src="https://img.shields.io/badge/-Next.JS-black?style=for-the-badge&logoColor=white&logo=nextdotjs&color=black" alt="next.js" />
-    <img src="https://img.shields.io/badge/-Vapi-white?style=for-the-badge&color=5dfeca" alt="vapi" />
+    <img src="https://img.shields.io/badge/-Gemini_Live-white?style=for-the-badge&color=4285F4" alt="Gemini Live" />
     <img src="https://img.shields.io/badge/-Tailwind_CSS-black?style=for-the-badge&logoColor=white&logo=tailwindcss&color=06B6D4" alt="tailwindcss" />
     <img src="https://img.shields.io/badge/-Firebase-black?style=for-the-badge&logoColor=white&logo=firebase&color=DD2C00" alt="firebase" />
   </div>
 
-  <h3 align="center">Prepwise: A job interview preparation platform powered by Vapi AI Voice agents</h3>
+  <h3 align="center">Prepwise: A job interview preparation platform powered by Gemini voice interviews</h3>
 
 </div>
 
@@ -32,23 +32,24 @@ If you prefer  learning, this is the perfect resource for you. Follow our tutori
 
 ## <a name="introduction">🤖 Introduction</a>
 
-Built with Next.js for the user interface and backend logic, Firebase for authentication and data storage, styled with TailwindCSS and using Vapi's voice agents, Prepwise is a website project designed to help you learn integrating AI models with your apps. The platform offers a sleek and modern experience for job interview preparation.
+Built with Next.js for the user interface and backend logic, Firebase for authentication and data storage, and TailwindCSS for styling, Prepwise uses Gemini Live for real-time voice interviews. When Live is unavailable, it can use browser speech recognition, Gemini Flash, and the vendored [tts.rocks](https://github.com/steveseguin/tts.rocks) Kokoro browser runtime.
 
 ## <a name="tech-stack">⚙️ Tech Stack</a>
 
 - Next.js
 - Firebase
 - Tailwind CSS
-- Vapi AI
+- Gemini Live
+- tts.rocks Kokoro browser TTS
 - shadcn/ui
-- Google Gemeni
+- Google Gemini
 - Zod
 
 ## <a name="features">🔋 Features</a>
 
 👉 **Authentication**: Sign Up and Sign In using password/email authentication handled by Firebase.
 
-👉 **Create Interviews**: Easily generate job interviews with help of Vapi voice assistants and Google Gemini.
+👉 **Create Interviews**: Collect interview preferences by voice and generate tailored questions with Google Gemini.
 
 👉 **Get feedback from AI**: Take the interview with AI voice agent, and receive instant feedback based on your conversation.
 
@@ -94,10 +95,10 @@ npm install
 Create a new file named `.env.local` in the root of your project and add the following content:
 
 ```env
-NEXT_PUBLIC_VAPI_WEB_TOKEN=
-NEXT_PUBLIC_VAPI_WORKFLOW_ID=
-
 GOOGLE_GENERATIVE_AI_API_KEY=
+GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview
+GEMINI_LEGACY_LIVE_MODEL=gemini-2.5-flash-native-audio-preview-12-2025
+GEMINI_FLASH_MODEL=gemini-3.7-flash
 
 NEXT_PUBLIC_BASE_URL=
 
@@ -113,7 +114,7 @@ FIREBASE_CLIENT_EMAIL=
 FIREBASE_PRIVATE_KEY=
 ```
 
-Replace the placeholder values with your actual **[Firebase](https://firebase.google.com/)**, **[Vapi](https://vapi.ai/?utm_source=youtube&utm_medium=video&utm_campaign=jsmastery_recruitingpractice&utm_content=paid_partner&utm_term=recruitingpractice)** credentials.
+Replace the placeholder values with your actual **[Firebase](https://firebase.google.com/)** credentials and a server-side Gemini API key. Never prefix the Gemini key with `NEXT_PUBLIC_`. Live model names are configurable because preview endpoints can change. When the primary Live model is unavailable, the app tries the configured older Live model before switching to compatibility voice mode.
 
 **Running the Project**
 
@@ -524,7 +525,7 @@ export const getRandomInterviewCover = () => {
 </details>
 
 <details>
-<summary><code>Generate questions prompt (/app/api/vapi/generate/route.tsx):</code></summary>
+<summary><code>Generate questions prompt (/app/api/interviews/generate/route.ts):</code></summary>
 
 ```javascript
 `Prepare questions for a job interview.

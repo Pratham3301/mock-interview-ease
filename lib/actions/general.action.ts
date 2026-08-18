@@ -1,13 +1,22 @@
 "use server";
 
 import { generateObject } from "ai";
-import { google } from "@ai-sdk/google";
 
 import { db } from "@/firebase/admin";
 import { feedbackSchema } from "@/constants";
+import { feedbackDocumentId } from "@/lib/feedback/idempotency";
+import { classifyGeminiError, type AppError } from "@/lib/gemini/errors";
+import { getFlashModel, redactGeminiError } from "@/lib/gemini/server";
 
-export async function createFeedback(params: CreateFeedbackParams) {
-  const { interviewId, userId, transcript, feedbackId } = params;
+type CreateFeedbackResult =
+  | { success: true; feedbackId: string }
+  | { success: false; error: AppError };
+
+export async function createFeedback(
+  params: CreateFeedbackParams
+): Promise<CreateFeedbackResult> {
+  const { interviewId, userId, transcript, feedbackId, temporaryApiKey } =
+    params;
 
   try {
     const formattedTranscript = transcript
@@ -17,10 +26,14 @@ export async function createFeedback(params: CreateFeedbackParams) {
       )
       .join("");
 
+    const { model } = getFlashModel(temporaryApiKey);
     const { object } = await generateObject({
-      model: google("gemini-2.0-flash-001", {
-        structuredOutputs: false,
-      }),
+      model: model,
+      providerOptions: {
+        google: {
+          structuredOutputs: false,
+        },
+      },
       schema: feedbackSchema,
       prompt: `
         You are an AI interviewer analyzing a mock interview. Your task is to evaluate the candidate based on structured categories. Be thorough and detailed in your analysis. Don't be lenient with the candidate. If there are mistakes or areas for improvement, point them out.
@@ -54,15 +67,25 @@ export async function createFeedback(params: CreateFeedbackParams) {
     if (feedbackId) {
       feedbackRef = db.collection("feedback").doc(feedbackId);
     } else {
-      feedbackRef = db.collection("feedback").doc();
+      const existing = await db
+        .collection("feedback")
+        .where("interviewId", "==", interviewId)
+        .where("userId", "==", userId)
+        .limit(1)
+        .get();
+      feedbackRef = existing.empty
+        ? db
+            .collection("feedback")
+            .doc(feedbackDocumentId(userId, interviewId))
+        : existing.docs[0].ref;
     }
 
     await feedbackRef.set(feedback);
 
     return { success: true, feedbackId: feedbackRef.id };
   } catch (error) {
-    console.error("Error saving feedback:", error);
-    return { success: false };
+    redactGeminiError(error);
+    return { success: false, error: classifyGeminiError(error) };
   }
 }
 

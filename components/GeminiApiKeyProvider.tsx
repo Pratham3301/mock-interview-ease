@@ -37,6 +37,8 @@ export function GeminiApiKeyProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
+    // The browser-only session store is intentionally hydrated after mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setApiKey(getTemporaryGeminiKey(sessionStorage));
   }, []);
 

@@ -2,8 +2,13 @@ import { describe, expect, it } from "vitest";
 import { zodSchema } from "ai";
 
 import { feedbackCategoryNames, feedbackSchema } from "@/constants";
+import { feedbackProviderOptions } from "@/lib/feedback/generation";
 
 describe("feedback schema", () => {
+  it("uses Gemini native structured output validation", () => {
+    expect(feedbackProviderOptions.google.structuredOutputs).toBe(true);
+  });
+
   it("uses one reusable array item schema accepted by Gemini", () => {
     const jsonSchema = zodSchema(feedbackSchema).jsonSchema as {
       properties?: {

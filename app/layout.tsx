@@ -1,12 +1,15 @@
 import { Toaster } from "sonner";
 import type { Metadata } from "next";
-import { Mona_Sans } from "next/font/google";
+import localFont from "next/font/local";
 
 import "./globals.css";
 
-const monaSans = Mona_Sans({
+const monaSans = localFont({
+  src: "./fonts/MonaSans.woff2",
   variable: "--font-mona-sans",
-  subsets: ["latin"],
+  display: "swap",
+  style: "normal",
+  weight: "200 900",
 });
 
 export const metadata: Metadata = {

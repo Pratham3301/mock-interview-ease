@@ -1,22 +1,6 @@
-import { createRequire } from "node:module";
-import type { Auth } from "firebase-admin/auth";
-import type { Firestore } from "firebase-admin/firestore";
-
-const nodeRequire = createRequire(__filename);
-const bufferModule = nodeRequire("node:buffer") as typeof import("node:buffer") & {
-  SlowBuffer?: typeof import("node:buffer").Buffer;
-};
-bufferModule.SlowBuffer ??= bufferModule.Buffer;
-
-const { initializeApp, getApps, cert } = nodeRequire(
-  "firebase-admin/app"
-) as typeof import("firebase-admin/app");
-const { getAuth } = nodeRequire(
-  "firebase-admin/auth"
-) as typeof import("firebase-admin/auth");
-const { getFirestore } = nodeRequire(
-  "firebase-admin/firestore"
-) as typeof import("firebase-admin/firestore");
+import { cert, getApps, initializeApp } from "firebase-admin/app";
+import { getAuth, type Auth } from "firebase-admin/auth";
+import { getFirestore, type Firestore } from "firebase-admin/firestore";
 
 interface FirebaseAdminServices {
   auth: Auth;

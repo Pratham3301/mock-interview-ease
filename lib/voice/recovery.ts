@@ -5,7 +5,7 @@ export type RecoveryDecision = "retry-live" | "fallback" | "surface-error";
 export function decideVoiceRecovery(
   error: AppError,
   attempt: number,
-  fallbackSupported: boolean
+  fallbackSupported: boolean,
 ): RecoveryDecision {
   if (error.code === "network" && attempt < 2) return "retry-live";
   if (
@@ -27,10 +27,10 @@ export function retryDelay(attempt: number) {
 function isAppError(error: unknown): error is AppError {
   return Boolean(
     error &&
-      typeof error === "object" &&
-      "code" in error &&
-      "message" in error &&
-      "title" in error
+    typeof error === "object" &&
+    "code" in error &&
+    "message" in error &&
+    "title" in error,
   );
 }
 
@@ -71,7 +71,7 @@ export async function establishVoiceMode({
       const decision = decideVoiceRecovery(
         lastError,
         attempt,
-        fallbackSupported
+        fallbackSupported,
       );
       if (decision === "retry-live") continue;
       if (decision === "fallback") {

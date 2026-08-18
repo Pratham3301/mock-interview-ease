@@ -74,10 +74,11 @@ const Agent = ({
   const messagesRef = useRef<TranscriptMessage[]>([]);
   const feedbackInFlight = useRef(false);
   const operationIdRef = useRef<string | undefined>(undefined);
-  const lastMeaningfulState = useRef<VoiceSessionState>("idle");
   const savedApiKeyRef = useRef("");
 
   const [voiceState, setVoiceState] = useState<VoiceSessionState>("idle");
+  const [lastMeaningfulState, setLastMeaningfulState] =
+    useState<VoiceSessionState>("idle");
   const [voiceMode, setVoiceMode] = useState<VoiceMode>();
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [notice, setNotice] = useState("");
@@ -89,8 +90,7 @@ const Agent = ({
     isActive || voiceState === "ending" || voiceState === "generating-feedback";
   const isFeedbackRecovery =
     error?.code === "feedback" ||
-    (lastMeaningfulState.current === "generating-feedback" &&
-      Boolean(interviewId));
+    (lastMeaningfulState === "generating-feedback" && Boolean(interviewId));
 
   useEffect(() => {
     const session = createVoiceSession();
@@ -105,7 +105,9 @@ const Agent = ({
         }
       }),
       session.onStateChange((state) => {
-        if (state !== "error") lastMeaningfulState.current = state;
+        if (state !== "error") {
+          setLastMeaningfulState(state);
+        }
         setVoiceState(state);
       }),
       session.onModeChange((mode, nextNotice) => {
@@ -131,8 +133,10 @@ const Agent = ({
           : stored;
       if (restored.length) {
         messagesRef.current = restored;
+        /* eslint-disable react-hooks/set-state-in-effect -- Restore persisted interview progress after the client session is available. */
         setMessages(restored);
         setError(feedbackError);
+        /* eslint-enable react-hooks/set-state-in-effect */
       }
     }
 
@@ -150,7 +154,7 @@ const Agent = ({
     sessionRef.current?.setApiKey(apiKey || undefined);
   }, [apiKey]);
 
-  const generateFeedback = async (transcript: TranscriptMessage[]) => {
+  async function generateFeedback(transcript: TranscriptMessage[]) {
     if (
       feedbackInFlight.current ||
       !interviewId ||
@@ -170,7 +174,7 @@ const Agent = ({
 
     feedbackInFlight.current = true;
     setError(undefined);
-    lastMeaningfulState.current = "generating-feedback";
+    setLastMeaningfulState("generating-feedback");
     setVoiceState("generating-feedback");
     storeTranscript(sessionStorage, interviewId, transcript);
 
@@ -207,7 +211,7 @@ const Agent = ({
     } finally {
       feedbackInFlight.current = false;
     }
-  };
+  }
 
   const handleStart = async (forceFallback = false) => {
     if (isBusy || !sessionRef.current || !userId) return;
@@ -271,7 +275,7 @@ const Agent = ({
   const canUseFallback =
     Boolean(error?.fallbackAvailable) &&
     voiceMode !== "fallback" &&
-    lastMeaningfulState.current !== "generating-interview";
+    lastMeaningfulState !== "generating-interview";
 
   const modeLabel = useMemo(() => {
     if (voiceMode === "live") return "Gemini Live";

@@ -2,6 +2,7 @@ import type {
   CompleteCallback,
   ErrorCallback,
   ModeCallback,
+  ProgressCallback,
   StateCallback,
   TranscriptCallback,
   TranscriptMessage,
@@ -9,6 +10,7 @@ import type {
   VoiceSession,
   VoiceSessionConfig,
   VoiceSessionState,
+  VoicePreparationProgress,
 } from "./types";
 import type { AppError } from "@/lib/gemini/errors";
 
@@ -23,6 +25,7 @@ export abstract class BaseVoiceSession implements VoiceSession {
   private stateListeners = new Set<StateCallback>();
   private errorListeners = new Set<ErrorCallback>();
   private modeListeners = new Set<ModeCallback>();
+  private progressListeners = new Set<ProgressCallback>();
   private completeListeners = new Set<CompleteCallback>();
 
   abstract start(config: VoiceSessionConfig): Promise<void>;
@@ -48,6 +51,10 @@ export abstract class BaseVoiceSession implements VoiceSession {
     return () => this.modeListeners.delete(callback);
   }
 
+  onProgress(callback: ProgressCallback) {
+    return this.addListener(this.progressListeners, callback);
+  }
+
   onComplete(callback: CompleteCallback) {
     return this.addListener(this.completeListeners, callback);
   }
@@ -71,6 +78,10 @@ export abstract class BaseVoiceSession implements VoiceSession {
 
   protected emitMode(mode: VoiceMode, notice?: string) {
     this.modeListeners.forEach((callback) => callback(mode, notice));
+  }
+
+  protected emitProgress(progress: VoicePreparationProgress) {
+    this.progressListeners.forEach((callback) => callback(progress));
   }
 
   protected emitComplete(reason: "interview" | "generation") {

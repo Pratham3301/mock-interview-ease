@@ -6,6 +6,7 @@ class FakeRecognition {
   static latest?: FakeRecognition;
   continuous = false;
   interimResults = false;
+  maxAlternatives = 0;
   lang = "";
   onresult: ((event: never) => void) | null = null;
   onerror: ((event: { error: string; message?: string }) => void) | null = null;
@@ -28,6 +29,22 @@ afterEach(() => {
 });
 
 describe("browser speech recognition lifecycle", () => {
+  it("uses final-only continuous recognition to reduce main-thread event churn", () => {
+    vi.stubGlobal("window", {
+      SpeechRecognition: FakeRecognition,
+      setTimeout,
+    });
+    const recognizer = new BrowserSpeechRecognizer(vi.fn(), vi.fn(), vi.fn());
+
+    recognizer.start();
+
+    expect(FakeRecognition.latest).toMatchObject({
+      continuous: true,
+      interimResults: false,
+      maxAlternatives: 1,
+    });
+  });
+
   it("ignores late errors from a recognizer that was aborted during cleanup", () => {
     vi.stubGlobal("window", {
       SpeechRecognition: FakeRecognition,

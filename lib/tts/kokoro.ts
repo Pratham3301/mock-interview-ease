@@ -1,6 +1,10 @@
 const KOKORO_MODEL = "onnx-community/Kokoro-82M-v1.0-ONNX";
 const KOKORO_VOICE = "af_heart";
 const TTS_ROCKS_BUNDLE_URL = "/vendor/tts-rocks/kokoro-bundle.es.js";
+const TTS_ROCKS_ORT_MODULE_URL =
+  "/vendor/tts-rocks/ort-wasm-simd-threaded.jsep.mjs";
+const TTS_ROCKS_ORT_WASM_URL =
+  "/vendor/tts-rocks/kokoro-ort-wasm-simd-threaded.jsep.wasm";
 
 type KokoroDevice = "webgpu" | "wasm";
 
@@ -27,6 +31,23 @@ interface TtsRocksModule {
     ): Promise<TtsRocksKokoroInstance>;
   };
   detectWebGPU(): Promise<boolean>;
+  env: {
+    backends: {
+      onnx?: {
+        logLevel?: "verbose" | "info" | "warning" | "error" | "fatal";
+        wasm?: {
+          wasmPaths?:
+            | string
+            | {
+                mjs: string;
+                wasm: string;
+              };
+          proxy?: boolean;
+          numThreads?: number;
+        };
+      };
+    };
+  };
 }
 
 type TtsRocksModuleLoader = () => Promise<TtsRocksModule>;
@@ -37,6 +58,14 @@ interface LoadedKokoroModel {
 }
 
 let sharedModel: Promise<LoadedKokoroModel> | undefined;
+let sharedModelReady = false;
+let sharedProgress = 0;
+const progressListeners = new Set<(progress: number) => void>();
+
+function emitSharedProgress(progress: number) {
+  sharedProgress = Math.max(0, Math.min(100, progress));
+  progressListeners.forEach((listener) => listener(sharedProgress));
+}
 
 async function loadTtsRocksModule(): Promise<TtsRocksModule> {
   // tts.rocks ships this as a complete browser ESM bundle. Loading it as a
@@ -47,6 +76,7 @@ async function loadTtsRocksModule(): Promise<TtsRocksModule> {
 }
 
 function progressReporter(onProgress?: (progress: number) => void) {
+  let previousProgress = -1;
   return (progress: unknown) => {
     if (
       !progress ||
@@ -56,7 +86,12 @@ function progressReporter(onProgress?: (progress: number) => void) {
     ) {
       return;
     }
-    onProgress?.(Math.max(0, Math.min(100, progress.progress)));
+    const nextProgress = Math.round(
+      Math.max(0, Math.min(100, progress.progress))
+    );
+    if (nextProgress === previousProgress) return;
+    previousProgress = nextProgress;
+    onProgress?.(nextProgress);
   };
 }
 
@@ -78,6 +113,21 @@ async function loadPreferredModel(
   onProgress?: (progress: number) => void
 ) {
   const bundle = await loader();
+  const onnxEnvironment = bundle.env.backends.onnx;
+  if (onnxEnvironment) {
+    // The tts.rocks bundle defaults to jsDelivr. Keep its matching ONNX
+    // runtime local and silence benign WebGPU node-assignment warnings while
+    // retaining errors that affect playback.
+    onnxEnvironment.logLevel = "error";
+    if (onnxEnvironment.wasm) {
+      onnxEnvironment.wasm.wasmPaths = {
+        mjs: TTS_ROCKS_ORT_MODULE_URL,
+        wasm: TTS_ROCKS_ORT_WASM_URL,
+      };
+      onnxEnvironment.wasm.proxy = false;
+      onnxEnvironment.wasm.numThreads = 1;
+    }
+  }
   if (await bundle.detectWebGPU()) {
     try {
       return await loadModel(bundle, "webgpu", onProgress);
@@ -92,15 +142,31 @@ function getSharedModel(
   loader: TtsRocksModuleLoader,
   onProgress?: (progress: number) => void
 ) {
-  if (!sharedModel) {
-    sharedModel = loadPreferredModel(loader, onProgress).catch((error) => {
-      // A rejected shared promise makes every Retry fail immediately. Clear it
-      // so a transient download/backend failure can be attempted again.
-      sharedModel = undefined;
-      throw error;
-    });
+  if (onProgress) {
+    progressListeners.add(onProgress);
+    onProgress(sharedModelReady ? 100 : sharedProgress);
   }
-  return sharedModel;
+  if (!sharedModel) {
+    sharedProgress = 0;
+    sharedModelReady = false;
+    sharedModel = loadPreferredModel(loader, emitSharedProgress)
+      .then((model) => {
+        sharedModelReady = true;
+        emitSharedProgress(100);
+        return model;
+      })
+      .catch((error) => {
+        // A rejected shared promise makes every Retry fail immediately. Clear it
+        // so a transient download/backend failure can be attempted again.
+        sharedModel = undefined;
+        sharedModelReady = false;
+        sharedProgress = 0;
+        throw error;
+      });
+  }
+  return sharedModel.finally(() => {
+    if (onProgress) progressListeners.delete(onProgress);
+  });
 }
 
 export class KokoroSpeaker {
@@ -124,10 +190,16 @@ export class KokoroSpeaker {
     return getSharedModel(this.moduleLoader, onProgress);
   }
 
-  async speak(text: string, onProgress?: (progress: number) => void) {
+  async speak(
+    text: string,
+    options: {
+      onProgress?: (progress: number) => void;
+      onPlaybackStart?: () => void;
+    } = {}
+  ) {
     this.stop();
     const generation = this.generation;
-    const { instance } = await this.prepare(onProgress);
+    const { instance } = await this.prepare(options.onProgress);
 
     let rawAudio: TtsRocksAudio;
     try {
@@ -164,7 +236,14 @@ export class KokoroSpeaker {
       audio.onerror = () =>
         finish(new Error("The browser could not play the generated audio."));
 
-      audio.play().catch((error) => finish(error));
+      audio
+        .play()
+        .then(() => {
+          if (!settled && generation === this.generation) {
+            options.onPlaybackStart?.();
+          }
+        })
+        .catch((error) => finish(error));
     });
   }
 

@@ -8,6 +8,7 @@ export type VoiceSessionState =
   | "assistant-thinking"
   | "assistant-speaking"
   | "preparing-voice"
+  | "preparing-speech"
   | "generating-interview"
   | "generating-feedback"
   | "reconnecting"
@@ -16,6 +17,12 @@ export type VoiceSessionState =
   | "error";
 
 export type VoiceMode = "live" | "fallback";
+
+export interface VoicePreparationProgress {
+  phase: "voice" | "speech-recognition";
+  progress: number;
+  label: string;
+}
 
 export interface TranscriptMessage {
   role: "user" | "assistant";
@@ -48,6 +55,7 @@ export type TranscriptCallback = (message: TranscriptMessage) => void;
 export type StateCallback = (state: VoiceSessionState) => void;
 export type ErrorCallback = (error: AppError) => void;
 export type ModeCallback = (mode: VoiceMode, notice?: string) => void;
+export type ProgressCallback = (progress: VoicePreparationProgress) => void;
 export type CompleteCallback = (reason: "interview" | "generation") => void;
 
 export interface VoiceSession {
@@ -60,5 +68,6 @@ export interface VoiceSession {
   onStateChange(callback: StateCallback): () => void;
   onError(callback: ErrorCallback): () => void;
   onModeChange(callback: ModeCallback): () => void;
+  onProgress(callback: ProgressCallback): () => void;
   onComplete(callback: CompleteCallback): () => void;
 }

@@ -36456,8 +36456,10 @@ class pf extends Xu {
     }
   }
 }
+const ttsRocksTransformersEnv = s2.env;
 export {
   pf as KokoroTTS,
   op as TextSplitterStream,
-  ip as detectWebGPU
+  ip as detectWebGPU,
+  ttsRocksTransformersEnv as env
 };

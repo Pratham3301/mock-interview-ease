@@ -1,5 +1,12 @@
 import { microphoneError, type AppError } from "@/lib/gemini/errors";
-import { BrowserSpeechRecognizer } from "@/lib/stt/browser";
+import {
+  createLocalSpeechRecognizer,
+  createSpeechRecognizer,
+  isSpeechRecognitionSupported,
+  shouldFallbackToLocalSpeechRecognition,
+  type SpeechRecognizerCallbacks,
+  type SpeechRecognizer,
+} from "@/lib/stt";
 import { KokoroSpeaker } from "@/lib/tts/kokoro";
 import { BaseVoiceSession } from "./VoiceSession";
 import { postJson, toAppError } from "./http";
@@ -23,10 +30,11 @@ interface InterviewGenerationResponse {
 }
 
 export class FallbackVoiceSession extends BaseVoiceSession {
-  private recognizer?: BrowserSpeechRecognizer;
+  private recognizer?: SpeechRecognizer;
   private readonly speaker = new KokoroSpeaker();
   private stopping = false;
   private processing = false;
+  private switchingRecognizer = false;
   private lastResponseRequest = false;
   private requirementsOperation = new RetainedOperation(
     (requirements: InterviewRequirements) => this.createInterview(requirements)
@@ -39,7 +47,7 @@ export class FallbackVoiceSession extends BaseVoiceSession {
     this.stopping = false;
     this.emitState("connecting");
 
-    if (!BrowserSpeechRecognizer.isSupported()) {
+    if (!isSpeechRecognitionSupported()) {
       throw this.unsupportedSpeechError();
     }
 
@@ -49,24 +57,40 @@ export class FallbackVoiceSession extends BaseVoiceSession {
     );
     this.emitState("preparing-voice");
     try {
-      await this.speaker.prepare();
+      await this.speaker.prepare((progress) =>
+        this.emitProgress({
+          phase: "voice",
+          progress,
+          label: "Downloading Kokoro voice",
+        })
+      );
     } catch (error) {
       await this.cleanup();
       throw this.voicePlaybackError(error);
     }
 
-    this.recognizer = new BrowserSpeechRecognizer(
-      (transcript) => void this.handleUserTranscript(transcript),
-      (speaking) =>
-        this.emitState(speaking ? "user-speaking" : "assistant-thinking"),
-      (error) => this.emitError(this.speechRecognitionError(error))
-    );
+    this.recognizer = createSpeechRecognizer(this.recognizerCallbacks());
 
+    this.emitState("connecting");
     try {
       await this.recognizer.requestPermission();
     } catch (error) {
       await this.cleanup();
       throw microphoneError(error);
+    }
+
+    if (this.recognizer.kind === "local") {
+      this.emitState("preparing-speech");
+      try {
+        await this.prepareLocalRecognizer(this.recognizer);
+      } catch (error) {
+        await this.cleanup();
+        if (this.stopping) return;
+        throw this.speechRecognitionError(
+          error instanceof Error ? error : new Error(String(error)),
+          "local"
+        );
+      }
     }
 
     try {
@@ -90,6 +114,77 @@ export class FallbackVoiceSession extends BaseVoiceSession {
     } catch (error) {
       await this.cleanup();
       throw this.isAppError(error) ? error : this.voicePlaybackError(error);
+    }
+  }
+
+  private recognizerCallbacks(): SpeechRecognizerCallbacks {
+    return {
+      onResult: (transcript) => void this.handleUserTranscript(transcript),
+      onSpeechActivity: (speaking) =>
+        this.emitState(speaking ? "user-speaking" : "assistant-thinking"),
+      onError: (error) => void this.handleSpeechRecognitionError(error),
+    };
+  }
+
+  private prepareLocalRecognizer(recognizer: SpeechRecognizer) {
+    return recognizer.prepare((progress) =>
+      this.emitProgress({
+        phase: "speech-recognition",
+        progress,
+        label: "Downloading local speech model",
+      })
+    );
+  }
+
+  private async handleSpeechRecognitionError(error: Error) {
+    const recognizer = this.recognizer;
+    if (
+      !recognizer ||
+      this.stopping ||
+      this.switchingRecognizer ||
+      !shouldFallbackToLocalSpeechRecognition(error, recognizer.kind)
+    ) {
+      if (!this.stopping) {
+        this.emitError(this.speechRecognitionError(error, recognizer?.kind));
+      }
+      return;
+    }
+
+    this.switchingRecognizer = true;
+    recognizer.abort();
+    try {
+      const localRecognizer = createLocalSpeechRecognizer(
+        this.recognizerCallbacks()
+      );
+      this.recognizer = localRecognizer;
+      this.emitMode(
+        "fallback",
+        "The browser speech service is unavailable, so local speech recognition is being used."
+      );
+      this.emitState("preparing-speech");
+      await localRecognizer.requestPermission();
+      await this.prepareLocalRecognizer(localRecognizer);
+      if (!this.stopping && this.recognizer === localRecognizer) {
+        this.startListening();
+      }
+    } catch (localError) {
+      const failedRecognizer = this.recognizer;
+      if (failedRecognizer?.kind === "local") {
+        failedRecognizer.abort();
+        if (this.recognizer === failedRecognizer) this.recognizer = undefined;
+      }
+      if (!this.stopping) {
+        this.emitError(
+          this.speechRecognitionError(
+            localError instanceof Error
+              ? localError
+              : new Error(String(localError)),
+            "local"
+          )
+        );
+      }
+    } finally {
+      this.switchingRecognizer = false;
     }
   }
 
@@ -209,9 +304,11 @@ export class FallbackVoiceSession extends BaseVoiceSession {
       timestamp: Date.now(),
       final: true,
     };
-    this.emitState("assistant-speaking");
+    this.emitState("assistant-thinking");
     try {
-      await this.speaker.speak(content);
+      await this.speaker.speak(content, {
+        onPlaybackStart: () => this.emitState("assistant-speaking"),
+      });
       this.emitTranscript(message);
     } catch (error) {
       throw this.voicePlaybackError(error);
@@ -240,21 +337,36 @@ export class FallbackVoiceSession extends BaseVoiceSession {
       code: "browser-unsupported",
       title: "Voice recognition isn't supported",
       message:
-        "Compatibility voice mode requires browser speech recognition. Try a supported Chromium browser or go back.",
+        "This browser can't run native or local speech recognition. Try a current browser with WebAssembly support or go back.",
       retryable: false,
       fallbackAvailable: false,
       byokAvailable: false,
     };
   }
 
-  private speechRecognitionError(error: Error): AppError {
+  private speechRecognitionError(
+    error: Error,
+    recognizerKind = this.recognizer?.kind
+  ): AppError {
     const normalized = error.message.toLowerCase();
-    if (normalized.includes("network")) {
+    if (recognizerKind === "browser" && normalized.includes("network")) {
       return {
         code: "network",
         title: "Speech recognition is unavailable",
         message:
           "The browser speech service couldn't connect. Check your connection and try again.",
+        retryable: true,
+        fallbackAvailable: false,
+        byokAvailable: false,
+        technicalMessage: error.message,
+      };
+    }
+    if (recognizerKind === "local") {
+      return {
+        code: "browser-unsupported",
+        title: "Local speech recognition couldn't start",
+        message:
+          "The local speech model couldn't run in this browser. Check WebAssembly support and try again.",
         retryable: true,
         fallbackAvailable: false,
         byokAvailable: false,

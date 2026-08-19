@@ -1,5 +1,8 @@
-type RecognitionResultCallback = (transcript: string) => void;
-type RecognitionStateCallback = (speaking: boolean) => void;
+import type {
+  RecognitionResultCallback,
+  RecognitionStateCallback,
+  SpeechRecognizer,
+} from "./types";
 
 interface SpeechRecognitionAlternativeLike {
   transcript: string;
@@ -23,6 +26,7 @@ interface SpeechRecognitionErrorEventLike extends Event {
 interface SpeechRecognitionLike {
   continuous: boolean;
   interimResults: boolean;
+  maxAlternatives: number;
   lang: string;
   onresult: ((event: SpeechRecognitionEventLike) => void) | null;
   onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
@@ -44,12 +48,14 @@ function getConstructor(): SpeechRecognitionConstructor | undefined {
   return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
 }
 
-export class BrowserSpeechRecognizer {
+export class BrowserSpeechRecognizer implements SpeechRecognizer {
+  readonly kind = "browser" as const;
   private recognition?: SpeechRecognitionLike;
   private active = false;
   private restarting = false;
   private generation = 0;
   private transientFailures = 0;
+  private unexpectedEnds = 0;
   private retryTimer?: ReturnType<typeof setTimeout>;
 
   static isSupported() {
@@ -85,9 +91,14 @@ export class BrowserSpeechRecognizer {
     stream.getTracks().forEach((track) => track.stop());
   }
 
+  async prepare() {
+    // Native recognition does not need a model download.
+  }
+
   start() {
     if (this.active) return;
     this.transientFailures = 0;
+    this.unexpectedEnds = 0;
     this.beginRecognition();
   }
 
@@ -106,12 +117,14 @@ export class BrowserSpeechRecognizer {
       this.generation === generation &&
       this.recognition === recognition;
 
-    recognition.continuous = false;
-    recognition.interimResults = true;
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
     recognition.lang = "en-US";
     recognition.onspeechstart = () => {
       if (isCurrent()) {
         this.transientFailures = 0;
+        this.unexpectedEnds = 0;
         this.onSpeechActivity(true);
       }
     };
@@ -126,6 +139,7 @@ export class BrowserSpeechRecognizer {
           const transcript = result[0]?.transcript?.trim();
           if (transcript) {
             this.transientFailures = 0;
+            this.unexpectedEnds = 0;
             this.onResult(transcript);
           }
           if (!isCurrent()) break;
@@ -148,6 +162,8 @@ export class BrowserSpeechRecognizer {
     recognition.onend = () => {
       if (!isCurrent() || this.restarting) return;
       this.restarting = true;
+      const delay = Math.min(2_000, 500 * 2 ** this.unexpectedEnds);
+      this.unexpectedEnds += 1;
       window.setTimeout(() => {
         this.restarting = false;
         if (!isCurrent()) return;
@@ -156,7 +172,7 @@ export class BrowserSpeechRecognizer {
         } catch {
           // A concurrent stop can race the browser's end event.
         }
-      }, 250);
+      }, delay);
     };
     try {
       recognition.start();
@@ -181,6 +197,7 @@ export class BrowserSpeechRecognizer {
     this.active = false;
     this.restarting = false;
     this.transientFailures = 0;
+    this.unexpectedEnds = 0;
     if (this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = undefined;

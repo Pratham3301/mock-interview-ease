@@ -14,3 +14,7 @@ Vendored files:
 
 The JavaScript bundle contains the upstream third-party license notices. The
 tts.rocks application code is MIT-licensed; Kokoro-JS is Apache-2.0 licensed.
+
+The bundle has one local integration patch: it re-exports the embedded
+Transformers.js environment so Prepwise can use these vendored ONNX runtime
+files instead of loading matching support files from jsDelivr.

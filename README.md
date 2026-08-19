@@ -32,7 +32,7 @@ If you prefer  learning, this is the perfect resource for you. Follow our tutori
 
 ## <a name="introduction">🤖 Introduction</a>
 
-Built with Next.js for the user interface and backend logic, Firebase for authentication and data storage, and TailwindCSS for styling, Prepwise uses Gemini Live for real-time voice interviews. When Live is unavailable, it can use browser speech recognition, Gemini Flash, and the vendored [tts.rocks](https://github.com/steveseguin/tts.rocks) Kokoro browser runtime.
+Built with Next.js for the user interface and backend logic, Firebase for authentication and data storage, and TailwindCSS for styling, Prepwise uses Gemini Live for real-time voice interviews. When Live is unavailable, it can use native browser speech recognition or worker-based local Moonshine STT, Gemini Flash, and the vendored [tts.rocks](https://github.com/steveseguin/tts.rocks) Kokoro browser runtime.
 
 ## <a name="tech-stack">⚙️ Tech Stack</a>
 
@@ -41,6 +41,7 @@ Built with Next.js for the user interface and backend logic, Firebase for authen
 - Tailwind CSS
 - Gemini Live
 - tts.rocks Kokoro browser TTS
+- Transformers.js and Moonshine local browser STT
 - shadcn/ui
 - Google Gemini
 - Zod
@@ -108,6 +109,9 @@ NEXT_PUBLIC_GEMINI_VAD_PREFIX_PADDING_MS=40
 NEXT_PUBLIC_GEMINI_VAD_START_SENSITIVITY=high
 NEXT_PUBLIC_GEMINI_VAD_END_SENSITIVITY=high
 
+# Optional fallback STT selection: auto (default), browser, or local
+NEXT_PUBLIC_FALLBACK_STT_MODE=auto
+
 NEXT_PUBLIC_BASE_URL=
 
 NEXT_PUBLIC_FIREBASE_API_KEY=
@@ -125,6 +129,8 @@ FIREBASE_PRIVATE_KEY=
 Replace the placeholder values with your actual **[Firebase](https://firebase.google.com/)** credentials and a server-side Gemini API key. Never prefix the Gemini key with `NEXT_PUBLIC_`. Live model names are configurable because preview endpoints can change. When the primary Live model is unavailable, the app tries the configured older Live model before switching to compatibility voice mode.
 
 The VAD settings are optional and contain no secrets. Hybrid VAD is enabled by default: browser-side silence detection asks Gemini to finish the turn after 450 ms, while Gemini's automatic server VAD remains available as a safety net. Reduce the client silence value for faster turn-taking, or increase it if natural pauses are being cut off. The start/end sensitivity values accept `high` or `low`.
+
+Fallback STT defaults to native browser speech recognition when it is available. In browsers without Web Speech support, Prepwise lazily downloads the compact Moonshine model and runs it in a Web Worker using WebGPU when available, with WebAssembly as the compatibility backend. Set `NEXT_PUBLIC_FALLBACK_STT_MODE=local` to force the worker-based recognizer, or `browser` to disable the local model fallback. Model files are cached by the browser after the first download.
 
 **Running the Project**
 

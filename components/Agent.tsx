@@ -17,6 +17,7 @@ import type {
   AppError,
   TranscriptMessage,
   VoiceMode,
+  VoicePreparationProgress,
   VoiceSession,
   VoiceSessionState,
 } from "@/lib/voice";
@@ -30,6 +31,7 @@ const statusLabels: Record<VoiceSessionState, string> = {
   "assistant-thinking": "Thinking…",
   "assistant-speaking": "Speaking…",
   "preparing-voice": "Preparing offline voice…",
+  "preparing-speech": "Preparing speech recognition…",
   "generating-interview": "Generating interview…",
   "generating-feedback": "Generating feedback…",
   reconnecting: "Reconnecting…",
@@ -45,6 +47,7 @@ const activeStates = new Set<VoiceSessionState>([
   "assistant-thinking",
   "assistant-speaking",
   "preparing-voice",
+  "preparing-speech",
   "generating-interview",
   "reconnecting",
 ]);
@@ -81,6 +84,8 @@ const Agent = ({
     useState<VoiceSessionState>("idle");
   const [voiceMode, setVoiceMode] = useState<VoiceMode>();
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
+  const [preparationProgress, setPreparationProgress] =
+    useState<VoicePreparationProgress>();
   const [notice, setNotice] = useState("");
   const [error, setError] = useState<AppError>();
 
@@ -108,6 +113,9 @@ const Agent = ({
         if (state !== "error") {
           setLastMeaningfulState(state);
         }
+        if (state !== "preparing-voice" && state !== "preparing-speech") {
+          setPreparationProgress(undefined);
+        }
         setVoiceState(state);
       }),
       session.onModeChange((mode, nextNotice) => {
@@ -115,6 +123,7 @@ const Agent = ({
         if (nextNotice) setNotice(nextNotice);
       }),
       session.onError((nextError) => setError(nextError)),
+      session.onProgress((progress) => setPreparationProgress(progress)),
       session.onComplete((reason) => {
         if (reason === "generation") {
           router.push("/");
@@ -304,6 +313,31 @@ const Agent = ({
             {statusLabels[voiceState]}
           </p>
           {modeLabel && <p className="text-xs text-light-400">{modeLabel}</p>}
+          {preparationProgress &&
+            (voiceState === "preparing-voice" ||
+              voiceState === "preparing-speech") && (
+              <div className="mt-2 w-full max-w-64" role="status">
+                <div className="mb-1 flex items-center justify-between gap-3 text-xs text-light-400">
+                  <span>{preparationProgress.label}…</span>
+                  <span>{Math.round(preparationProgress.progress)}%</span>
+                </div>
+                <div
+                  className="h-2 overflow-hidden rounded-full bg-dark-200"
+                  role="progressbar"
+                  aria-label={preparationProgress.label}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(preparationProgress.progress)}
+                >
+                  <div
+                    className="h-full rounded-full bg-primary-200 transition-[width] duration-200 ease-out"
+                    style={{
+                      width: `${Math.min(100, Math.max(0, preparationProgress.progress))}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
         </div>
 
         <div className="card-border">

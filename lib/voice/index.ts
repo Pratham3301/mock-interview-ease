@@ -1,6 +1,6 @@
 import type { AppError } from "@/lib/gemini/errors";
 import { classifyGeminiError } from "@/lib/gemini/errors";
-import { BrowserSpeechRecognizer } from "@/lib/stt/browser";
+import { isSpeechRecognitionSupported } from "@/lib/stt";
 import { BaseVoiceSession } from "./VoiceSession";
 import { FallbackVoiceSession } from "./fallback-session";
 import { GeminiLiveSession } from "./gemini-live";
@@ -83,7 +83,7 @@ export class ManagedVoiceSession extends BaseVoiceSession {
             initialTranscript: this.transcript,
             forceFallback: true,
           }),
-        fallbackSupported: BrowserSpeechRecognizer.isSupported(),
+        fallbackSupported: isSpeechRecognitionSupported(),
         forceFallback: config.forceFallback,
         onRetry: () => this.emitState("reconnecting"),
         pause: (milliseconds) =>
@@ -151,6 +151,7 @@ export class ManagedVoiceSession extends BaseVoiceSession {
       session.onModeChange((nextMode, notice) =>
         this.emitMode(nextMode, notice)
       ),
+      session.onProgress((progress) => this.emitProgress(progress)),
       session.onComplete((reason) => this.emitComplete(reason)),
       session.onError((error) => void this.handleSessionError(error, mode)),
     ];
@@ -186,7 +187,7 @@ export class ManagedVoiceSession extends BaseVoiceSession {
       mode === "live" &&
       this.state !== "generating-interview" &&
       error.fallbackAvailable &&
-      BrowserSpeechRecognizer.isSupported()
+      isSpeechRecognitionSupported()
     ) {
       await this.switchToFallback(
         "Live voice was interrupted. Your completed transcript has been kept and compatibility voice mode is continuing."
@@ -198,12 +199,12 @@ export class ManagedVoiceSession extends BaseVoiceSession {
 
   private async switchToFallback(notice: string) {
     if (this.switching || !this.config) return;
-    if (!BrowserSpeechRecognizer.isSupported()) {
+    if (!isSpeechRecognitionSupported()) {
       this.emitError({
         code: "browser-unsupported",
         title: "Voice recognition isn't supported",
         message:
-          "Compatibility voice mode requires browser speech recognition. Try a supported Chromium browser or go back.",
+          "This browser can't run native or local speech recognition. Try a current browser with WebAssembly support or go back.",
         retryable: false,
         fallbackAvailable: false,
         byokAvailable: false,
@@ -232,7 +233,7 @@ export class ManagedVoiceSession extends BaseVoiceSession {
 
   private emitSupportedError(error: AppError) {
     this.emitError(
-      !BrowserSpeechRecognizer.isSupported() && error.fallbackAvailable
+      !isSpeechRecognitionSupported() && error.fallbackAvailable
         ? { ...error, fallbackAvailable: false }
         : error
     );
@@ -250,4 +251,5 @@ export type {
   VoiceSession,
   VoiceSessionConfig,
   VoiceSessionState,
+  VoicePreparationProgress,
 } from "./types";

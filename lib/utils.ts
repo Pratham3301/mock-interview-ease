@@ -33,8 +33,16 @@ const getDeviconNames = async () => {
     const response = await fetch(
       "https://raw.githubusercontent.com/devicons/devicon/master/devicon.json"
     );
-    const data = await response.json();
-    cachedDeviconNames = data.map((icon: any) => icon.name);
+    const data: unknown = await response.json();
+    cachedDeviconNames = Array.isArray(data)
+      ? data
+          .map((icon) =>
+            icon && typeof icon === "object" && "name" in icon
+              ? icon.name
+              : undefined
+          )
+          .filter((name): name is string => typeof name === "string")
+      : [];
   } catch (error) {
     console.error("Failed to load devicon.json", error);
     cachedDeviconNames = null;

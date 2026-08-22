@@ -33,9 +33,10 @@ const InterviewCard = async ({
       Technical: "bg-light-800",
     }[normalizedType] || "bg-light-600";
 
-  const formattedDate = dayjs(
-    feedback?.createdAt || createdAt || Date.now()
-  ).format("MMM D, YYYY");
+  const interviewDate = feedback?.createdAt || createdAt;
+  const formattedDate = interviewDate
+    ? dayjs(interviewDate).format("MMM D, YYYY")
+    : "Date unavailable";
 
   return (
     <div className="card-border w-[360px] max-sm:w-full min-h-96">

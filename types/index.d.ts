@@ -28,8 +28,14 @@ interface Interview {
 interface CreateFeedbackParams {
   interviewId: string;
   userId: string;
-  transcript: { role: string; content: string }[];
+  transcript: {
+    role: "user" | "assistant";
+    content: string;
+    timestamp?: number;
+    final?: boolean;
+  }[];
   feedbackId?: string;
+  temporaryApiKey?: string;
 }
 
 interface User {
@@ -54,6 +60,12 @@ interface AgentProps {
   feedbackId?: string;
   type: "generate" | "interview";
   questions?: string[];
+  initialTranscript?: {
+    role: "user" | "assistant";
+    content: string;
+    timestamp: number;
+    final: true;
+  }[];
 }
 
 interface RouteParams {
